@@ -1,0 +1,35 @@
+---
+description: How AI chapter generation works (two-pass) and how to refine it further
+alwaysApply: true
+---
+
+# Chapter Generation — Two-Pass
+
+Chapter generation is **implemented as two passes** in `server/src/gemini.ts`, with
+duration-aware budgets in `server/src/chapter-guidance.ts` and post-processing in
+`server/src/validate-chapters.ts`.
+
+## Current implementation
+
+**Pass 1 — Boundary detection** (`detectBoundaries`)
+- Sends transcript chunks to Gemini with a prompt focused only on finding topic-shift timestamps
+- Output: `[{ startSeconds, topicSummary }]` (no polished titles yet)
+- Goal: maximize recall of real section boundaries (intentionally over-detects)
+
+**Pass 2 — Title + merge/split** (`titleAndRefine`)
+- Sends Pass 1 boundaries plus the full chunked transcript back to Gemini
+- Gemini writes concise chapter titles and merges over-granular splits / splits missed boundaries
+- Output: final `[{ title, startSeconds }]`, then run through `validateChapters`
+
+**Why two passes**
+- Separates "where do topics change?" from "what should we call each section?"
+- Fixes both over-segmentation (micro-chapter spam) and under-segmentation (single-topic
+  videos collapsing to one chapter)
+- Costs ~2× Gemini calls per video
+
+## Refining further
+
+If chapter quality still needs work, do NOT remove the two-pass structure. Prefer, in order:
+1. Prompt tuning within Pass 1 / Pass 2 (recall in Pass 1, merge/split judgement in Pass 2)
+2. Tuning `chapter-guidance.ts` budgets / `validate-chapters.ts` gap + cap logic
+3. Embedding-based segmentation only as a last resort, and only if the user asks.

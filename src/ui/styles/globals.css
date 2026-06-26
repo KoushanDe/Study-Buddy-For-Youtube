@@ -1,0 +1,54 @@
+@import 'tailwindcss';
+
+:root {
+  --yn-bg: #0f0f0f;
+  --yn-surface: #212121;
+  --yn-border: #3f3f3f;
+  --yn-text: #f1f1f1;
+  --yn-muted: #aaaaaa;
+  --yn-accent: #3ea6ff;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --yn-bg: #ffffff;
+    --yn-surface: #f9f9f9;
+    --yn-border: #e5e5e5;
+    --yn-text: #0f0f0f;
+    --yn-muted: #606060;
+    --yn-accent: #065fd4;
+  }
+}
+
+html[dark] {
+  --yn-bg: #0f0f0f;
+  --yn-surface: #212121;
+  --yn-border: #3f3f3f;
+  --yn-text: #f1f1f1;
+  --yn-muted: #aaaaaa;
+  --yn-accent: #3ea6ff;
+}
+
+body {
+  margin: 0;
+  font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--yn-bg);
+  color: var(--yn-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.yn-popup-title {
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.yn-popup-tagline {
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.yn-popup-credits {
+  font-weight: 400;
+  line-height: 1.4;
+}
