@@ -3,8 +3,6 @@ import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { generateChaptersWithGemini } from './gemini.js'
-import { fetchTranscriptFromPlayer } from './innertube.js'
-import { fetchTranscriptViaInnertube } from './youtube-transcript.js'
 import type { Context } from 'hono'
 import type { ChapterRequest } from './types.js'
 
@@ -64,8 +62,9 @@ app.post('/api/chapters', async (c) => {
     return c.json({ error: 'videoId, title, and chunks are required' }, 400)
   }
 
+  const transcriptChars = body.chunks.reduce((sum, chunk) => sum + chunk.text.length, 0)
   console.log(
-    `[${timestamp()}] chapters request videoId=${body.videoId} chunks=${body.chunks.length} duration=${body.durationSeconds ?? '?'}s`,
+    `[${timestamp()}] chapters request videoId=${body.videoId} chunks=${body.chunks.length} chars=${transcriptChars} duration=${body.durationSeconds}s`,
   )
 
   try {
@@ -78,61 +77,6 @@ app.post('/api/chapters', async (c) => {
     return c.json({ error: message }, 500)
   }
 })
-
-app.post('/api/transcript', async (c) => {
-  const clientIp = getClientIp(c)
-  const unauthorized = authorizeRequest(c)
-  if (unauthorized) return unauthorized
-
-  if (!checkRateLimit(requestLog, clientIp, RATE_LIMIT_MAX)) {
-    return c.json({ error: 'Rate limit exceeded. Try again shortly.' }, 429)
-  }
-
-  let body: { videoId?: string }
-  try {
-    body = await c.req.json<{ videoId?: string }>()
-  } catch {
-    return c.json({ error: 'Invalid JSON body' }, 400)
-  }
-
-  if (!body.videoId) {
-    return c.json({ error: 'videoId is required' }, 400)
-  }
-
-  console.log(`[${timestamp()}] transcript request videoId=${body.videoId}`)
-
-  try {
-    const transcript = await fetchTranscriptForVideo(body.videoId)
-    console.log(
-      `[${timestamp()}] transcript ok videoId=${body.videoId} segments=${transcript.segments.length} lang=${transcript.language}`,
-    )
-    return c.json({
-      videoId: body.videoId,
-      language: transcript.language,
-      segments: transcript.segments,
-      text: transcript.text,
-    })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Transcript fetch failed'
-    console.error(`[${timestamp()}] transcript failed videoId=${body.videoId}: ${message}`)
-    return c.json({ error: message }, 500)
-  }
-})
-
-/**
- * Resolves a transcript using youtubei.js (InnerTube get_transcript) first, since
- * it is the most reliable from a residential IP. Falls back to the legacy
- * caption-track scraper only if the library path fails.
- */
-async function fetchTranscriptForVideo(videoId: string) {
-  try {
-    return await fetchTranscriptViaInnertube(videoId)
-  } catch (primaryError) {
-    const message = primaryError instanceof Error ? primaryError.message : String(primaryError)
-    console.warn(`[${timestamp()}] innertube transcript failed videoId=${videoId}: ${message}`)
-    return await fetchTranscriptFromPlayer(videoId)
-  }
-}
 
 function authorizeRequest(c: Context) {
   if (!EXTENSION_API_TOKEN) return null

@@ -1,4 +1,5 @@
 import { isExtensionContextValid } from '../../shared/utils/extension-context'
+import { sendMessage } from '../../shared/messaging/send-message'
 import { hasPlaylistDetails } from '../../shared/utils/playlist-details'
 import { getPlaylistId } from '../../shared/utils/youtube-url'
 import { PlaylistObserver } from './playlist-observer'
@@ -18,9 +19,7 @@ export function startPlaylistScanner(playlistId: string): () => void {
     latestResult = result
     if (!isExtensionContextValid()) return
 
-    void chrome.runtime
-      .sendMessage({ type: 'PLAYLIST_DURATIONS_UPDATED', payload: result })
-      .catch(() => undefined)
+    void sendMessage({ type: 'PLAYLIST_DURATIONS_UPDATED', payload: result })
   })
   observer.start()
 

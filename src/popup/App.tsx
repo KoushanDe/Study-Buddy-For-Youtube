@@ -1,24 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { PlaylistDurationResult } from '../shared/types/playlist'
+import type { VideoContext } from '../shared/types/video'
 import { hasPlaylistDetails } from '../shared/utils/playlist-details'
 import { getPlaylistIdFromUrl, getVideoIdFromUrl, isWatchUrl } from '../shared/utils/youtube-url'
-import { sendMessage } from '../shared/messaging/send-message'
+import { sendMessage, sendMessageToTab } from '../shared/messaging/send-message'
 import { ChaptersPanel } from './components/ChaptersPanel'
+import { ExtensionIcon } from './components/ExtensionIcon'
 import { PlaylistDurationPanel } from './components/PlaylistDurationPanel'
-import icon48 from '../../public/icons/icon48.png'
 
 const CREDITS_LINKEDIN_URL = 'https://www.linkedin.com/in/koushan-de-04a966192'
-
-function isPlaylistUrl(url: string | undefined): boolean {
-  return getPlaylistIdFromUrl(url ?? '') !== null
-}
-
-interface VideoContext {
-  videoId: string
-  title: string
-  durationSeconds: number
-}
-
 const PLAYLIST_LOAD_TIMEOUT_MS = 8000
 
 async function fetchPlaylistDuration(
@@ -26,16 +16,92 @@ async function fetchPlaylistDuration(
   playlistId: string,
 ): Promise<PlaylistDurationResult | null> {
   try {
-    const response = (await chrome.tabs.sendMessage(tabId, {
+    const response = (await sendMessageToTab(tabId, {
       type: 'GET_PLAYLIST_DURATION',
       payload: { playlistId },
-    })) as { result?: PlaylistDurationResult | null }
-    const result = response.result ?? null
+    })) as { result?: PlaylistDurationResult | null } | undefined
+    const result = response?.result ?? null
     if (result && result.playlistId !== playlistId) return null
     return result
   } catch {
     return null
   }
+}
+
+function PlaylistDurationLoader({
+  tabId,
+  playlistId,
+}: {
+  tabId: number
+  playlistId: string
+}) {
+  const [loading, setLoading] = useState(true)
+  const [failed, setFailed] = useState(false)
+  const [result, setResult] = useState<PlaylistDurationResult | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const loadStartedAt = Date.now()
+
+    const applyResult = (data: PlaylistDurationResult | null) => {
+      if (!hasPlaylistDetails(data)) {
+        setResult(null)
+        const timedOut = Date.now() - loadStartedAt >= PLAYLIST_LOAD_TIMEOUT_MS
+        setLoading(!timedOut)
+        setFailed(timedOut)
+        return
+      }
+
+      setResult(data)
+      setLoading(false)
+      setFailed(false)
+    }
+
+    const refresh = async () => {
+      const tab = await chrome.tabs.get(tabId)
+      const currentPlaylistId = getPlaylistIdFromUrl(tab.url ?? '')
+      if (!currentPlaylistId || currentPlaylistId !== playlistId) {
+        if (!cancelled) {
+          setResult(null)
+          const timedOut = Date.now() - loadStartedAt >= PLAYLIST_LOAD_TIMEOUT_MS
+          setLoading(!timedOut)
+          setFailed(timedOut)
+        }
+        return
+      }
+
+      const data = await fetchPlaylistDuration(tabId, playlistId)
+      if (!cancelled) applyResult(data)
+    }
+
+    void refresh()
+    const timer = setInterval(() => void refresh(), 1500)
+    const timeout = setTimeout(() => {
+      if (cancelled) return
+      setFailed(true)
+      setLoading(false)
+    }, PLAYLIST_LOAD_TIMEOUT_MS)
+
+    const onUpdate = (message: { type?: string; payload?: PlaylistDurationResult }) => {
+      if (message.type !== 'PLAYLIST_DURATIONS_UPDATED' || !message.payload) return
+      if (message.payload.playlistId !== playlistId) return
+      if (!hasPlaylistDetails(message.payload)) return
+      setResult(message.payload)
+      setLoading(false)
+      setFailed(false)
+    }
+
+    chrome.runtime.onMessage.addListener(onUpdate)
+
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+      clearTimeout(timeout)
+      chrome.runtime.onMessage.removeListener(onUpdate)
+    }
+  }, [tabId, playlistId])
+
+  return <PlaylistDurationPanel result={result} loading={loading} failed={failed} />
 }
 
 export default function App() {
@@ -46,15 +112,24 @@ export default function App() {
   const [videoContext, setVideoContext] = useState<VideoContext | null>(null)
   const [playlistExpanded, setPlaylistExpanded] = useState(false)
   const [chaptersExpanded, setChaptersExpanded] = useState(false)
-  const [playlistLoading, setPlaylistLoading] = useState(false)
-  const [playlistFailed, setPlaylistFailed] = useState(false)
-  const [playlistResult, setPlaylistResult] = useState<PlaylistDurationResult | null>(null)
+
+  const refreshActiveTab = useCallback(() => {
+    if (activeTabId !== null) {
+      void chrome.tabs.reload(activeTabId)
+      return
+    }
+
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tabId = tabs[0]?.id
+      if (tabId !== undefined) void chrome.tabs.reload(tabId)
+    })
+  }, [activeTabId])
 
   useEffect(() => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs[0]
       const url = tab?.url ?? ''
-      setOnPlaylistPage(isPlaylistUrl(url))
+      setOnPlaylistPage(getPlaylistIdFromUrl(url) !== null)
       setOnWatchPage(isWatchUrl(url))
       setActiveTabId(tab?.id ?? null)
       setActivePlaylistId(getPlaylistIdFromUrl(url))
@@ -80,9 +155,7 @@ export default function App() {
           tabUrl = undefined
         }
 
-        const fromTab = await chrome.tabs
-          .sendMessage(activeTabId, { type: 'GET_VIDEO_CONTEXT' })
-          .catch(() => null)
+        const fromTab = await sendMessageToTab(activeTabId, { type: 'GET_VIDEO_CONTEXT' })
         if (isContext(fromTab)) {
           const urlVideoId = getVideoIdFromUrl(tabUrl ?? '')
           if (!urlVideoId || fromTab.videoId === urlVideoId) return fromTab
@@ -120,109 +193,23 @@ export default function App() {
     }
   }, [chaptersExpanded, activeTabId])
 
-  useEffect(() => {
-    if (!playlistExpanded || activeTabId === null || !activePlaylistId) return
-
-    let cancelled = false
-    let loadStartedAt = Date.now()
-
-    const applyResult = (data: PlaylistDurationResult | null) => {
-      if (!hasPlaylistDetails(data)) {
-        setPlaylistResult(null)
-        const timedOut = Date.now() - loadStartedAt >= PLAYLIST_LOAD_TIMEOUT_MS
-        setPlaylistLoading(!timedOut)
-        setPlaylistFailed(timedOut)
-        return
-      }
-
-      setPlaylistResult(data)
-      setPlaylistLoading(false)
-      setPlaylistFailed(false)
-    }
-
-    const refresh = async () => {
-      const tab = await chrome.tabs.get(activeTabId)
-      const playlistId = getPlaylistIdFromUrl(tab.url ?? '')
-      if (!playlistId || playlistId !== activePlaylistId) {
-        if (!cancelled) {
-          setPlaylistResult(null)
-          const timedOut = Date.now() - loadStartedAt >= PLAYLIST_LOAD_TIMEOUT_MS
-          setPlaylistLoading(!timedOut)
-          setPlaylistFailed(timedOut)
-        }
-        return
-      }
-
-      const data = await fetchPlaylistDuration(activeTabId, playlistId)
-      if (!cancelled) applyResult(data)
-    }
-
-    setPlaylistResult(null)
-    setPlaylistLoading(true)
-    setPlaylistFailed(false)
-    loadStartedAt = Date.now()
-    void refresh()
-    const timer = setInterval(() => void refresh(), 1500)
-    const timeout = setTimeout(() => {
-      if (cancelled) return
-      setPlaylistFailed(true)
-      setPlaylistLoading(false)
-    }, PLAYLIST_LOAD_TIMEOUT_MS)
-
-    const onUpdate = (message: { type?: string; payload?: PlaylistDurationResult }) => {
-      if (message.type !== 'PLAYLIST_DURATIONS_UPDATED' || !message.payload) return
-      if (message.payload.playlistId !== activePlaylistId) return
-      if (!hasPlaylistDetails(message.payload)) return
-      setPlaylistResult(message.payload)
-      setPlaylistLoading(false)
-      setPlaylistFailed(false)
-    }
-
-    chrome.runtime.onMessage.addListener(onUpdate)
-
-    return () => {
-      cancelled = true
-      clearInterval(timer)
-      clearTimeout(timeout)
-      chrome.runtime.onMessage.removeListener(onUpdate)
-    }
-  }, [playlistExpanded, activeTabId, activePlaylistId])
-
   const togglePlaylistDuration = () => {
-    if (playlistExpanded) {
-      setPlaylistExpanded(false)
-      setPlaylistResult(null)
-      return
-    }
-
-    setPlaylistExpanded(true)
-    setPlaylistLoading(true)
-    setPlaylistFailed(false)
-    setPlaylistResult(null)
+    setPlaylistExpanded((open) => !open)
   }
 
   const toggleChapters = () => {
-    if (chaptersExpanded) {
-      setChaptersExpanded(false)
-      setVideoContext(null)
-      return
-    }
-
-    setChaptersExpanded(true)
-    setVideoContext(null)
+    setChaptersExpanded((open) => !open)
   }
+
+  const chaptersPanelKey = videoContext
+    ? `${videoContext.videoId}:${videoContext.needsRefresh ? 'stale' : 'fresh'}`
+    : 'pending'
 
   return (
     <div className="w-[340px] p-5">
       <header className="mb-5">
         <div className="flex items-center gap-2.5">
-          <img
-            src={icon48}
-            alt=""
-            className="h-8 w-8 shrink-0 rounded-lg"
-            width={32}
-            height={32}
-          />
+          <ExtensionIcon className="h-8 w-8 shrink-0" />
           <h1 className="yn-popup-title text-base text-[var(--yn-text)]">
             Study Buddy for YouTube
           </h1>
@@ -243,12 +230,12 @@ export default function App() {
           <span className="text-xs text-[var(--yn-muted)]">{playlistExpanded ? 'Hide' : 'Show'}</span>
         </button>
 
-        {playlistExpanded && (
+        {playlistExpanded && activeTabId !== null && activePlaylistId !== null && (
           <div className="border-t border-[var(--yn-border)] px-3.5 py-3">
-            <PlaylistDurationPanel
-              result={playlistResult}
-              loading={playlistLoading}
-              failed={playlistFailed}
+            <PlaylistDurationLoader
+              key={activePlaylistId}
+              tabId={activeTabId}
+              playlistId={activePlaylistId}
             />
           </div>
         )}
@@ -265,15 +252,15 @@ export default function App() {
           <span className="text-xs text-[var(--yn-muted)]">{chaptersExpanded ? 'Hide' : 'Show'}</span>
         </button>
 
-        {chaptersExpanded && (
-          <div className="border-t border-[var(--yn-border)] px-3.5 py-3">
-            <ChaptersPanel
-              key={videoContext?.videoId ?? 'no-video'}
-              videoContext={videoContext}
-              enabled
-            />
-          </div>
-        )}
+        <div
+          className={`border-t border-[var(--yn-border)] px-3.5 py-3 ${chaptersExpanded ? '' : 'hidden'}`}
+        >
+          <ChaptersPanel
+            key={chaptersPanelKey}
+            videoContext={videoContext}
+            onRefreshTab={refreshActiveTab}
+          />
+        </div>
       </div>
 
       {!onPlaylistPage && !onWatchPage && (

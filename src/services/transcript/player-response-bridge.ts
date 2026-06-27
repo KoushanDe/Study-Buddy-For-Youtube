@@ -1,6 +1,5 @@
+import { PLAYER_RESPONSE_EVENT } from '../../shared/constants'
 import { parseEmbeddedJson } from '../../shared/utils/json-extract'
-
-const EVENT_NAME = 'study-buddy-for-youtube-player-response'
 
 let cachedResponse: Record<string, unknown> | null = null
 
@@ -29,22 +28,16 @@ export function listenForPlayerResponse(
     if (detail) apply(detail)
   }
 
-  document.addEventListener(EVENT_NAME, handler)
+  document.addEventListener(PLAYER_RESPONSE_EVENT, handler)
 
   const onNavigate = () => {
     cachedResponse = null
-    const response = parseFromScripts()
-    if (response) apply(response)
   }
 
   document.addEventListener('yt-navigate-finish', onNavigate)
 
   return () => {
-    document.removeEventListener(EVENT_NAME, handler)
+    document.removeEventListener(PLAYER_RESPONSE_EVENT, handler)
     document.removeEventListener('yt-navigate-finish', onNavigate)
   }
-}
-
-export function getCachedPlayerResponse(): Record<string, unknown> | null {
-  return cachedResponse ?? parseFromScripts()
 }

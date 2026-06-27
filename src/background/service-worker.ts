@@ -4,10 +4,17 @@ import {
   generateChapters,
   regenerateChapters,
 } from '../services/chapters/chapter.service'
+import {
+  getChapterJobSnapshot,
+  isChapterJobRunning,
+  runDedupedChapterJob,
+  type ChapterGenerationResult,
+} from '../services/chapters/chapter-generation-coordinator'
 import { fetchTranscript } from '../services/transcript/transcript.service'
 import { getChapterCache, getSettings, hashTranscript } from '../shared/storage/storage'
+import { getRegenerateQuota, recordRegenerate } from '../shared/storage/regenerate-rate-limit'
 import { sendMessageToTab } from '../shared/messaging/send-message'
-import type { Chapter, ChapterSource } from '../shared/types/chapter'
+import type { Chapter } from '../shared/types/chapter'
 
 let activeYoutubeTabId: number | null = null
 let lastVideoContext: Message & { type: 'VIDEO_CONTEXT' } | null = null
@@ -31,24 +38,24 @@ chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) =>
   return true
 })
 
-// The MV3 service worker is ephemeral and loses in-memory state when it sleeps,
-// so resolve the active YouTube watch tab on demand rather than relying solely
-// on the cached id.
-// Broadcasts coarse generation milestones to the popup so it can show a real,
-// stage-anchored progress bar. The popup smooths motion between these floors.
 function emitChapterProgress(videoId: string, progress: number, label: string): void {
   void chrome.runtime
     .sendMessage({ type: 'CHAPTER_PROGRESS', payload: { videoId, progress, label } })
     .catch(() => undefined)
 }
 
-async function getLiveVideoContext(
-  tabId: number,
-): Promise<{ videoId: string; title: string; durationSeconds: number } | null> {
+type VideoContextPayload = {
+  videoId: string
+  title: string
+  durationSeconds: number
+  needsRefresh?: boolean
+}
+
+async function getLiveVideoContext(tabId: number): Promise<VideoContextPayload | null> {
   try {
     const live = await sendMessageToTab(tabId, { type: 'GET_VIDEO_CONTEXT' })
     if (live && typeof live === 'object' && 'videoId' in live) {
-      const context = live as { videoId: string; title: string; durationSeconds: number }
+      const context = live as VideoContextPayload
       lastVideoContext = { type: 'VIDEO_CONTEXT', payload: context }
       return context
     }
@@ -84,6 +91,81 @@ async function resolveYoutubeTabId(sender: chrome.runtime.MessageSender): Promis
   return null
 }
 
+async function getNativeChapters(tabId: number, videoId: string): Promise<Chapter[]> {
+  try {
+    const live = await getLiveVideoContext(tabId)
+    if (live?.needsRefresh || (live && live.videoId !== videoId)) {
+      return []
+    }
+
+    const response = (await sendMessageToTab(tabId, {
+      type: 'GET_NATIVE_CHAPTERS',
+      payload: { videoId },
+    })) as { chapters?: Chapter[] }
+
+    return response.chapters ?? []
+  } catch {
+    return []
+  }
+}
+
+async function getTranscriptForChapters(videoId: string, tabId: number) {
+  try {
+    return await fetchTranscript(videoId, tabId)
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Failed to load transcript' } as const
+  }
+}
+
+async function executeChapterGeneration(
+  videoId: string,
+  title: string,
+  durationSeconds: number,
+  tabId: number,
+  forceRegenerate: boolean,
+): Promise<ChapterGenerationResult> {
+  return runDedupedChapterJob(videoId, emitChapterProgress, async (onProgress) => {
+    if (!forceRegenerate) {
+      const cached = await getChapterCache(videoId)
+      if (cached) {
+        return {
+          chapters: cached.chapters,
+          source: cached.source,
+          cached: true,
+        }
+      }
+    }
+
+    onProgress(8, 'Checking YouTube chapters…')
+    const nativeChapters = await getNativeChapters(tabId, videoId)
+    if (nativeChapters.length >= 2) {
+      const result = await cacheNativeChapters(videoId, nativeChapters)
+      return { ...result, cached: false }
+    }
+
+    onProgress(15, 'Reading transcript…')
+    const transcriptResult = await getTranscriptForChapters(videoId, tabId)
+    if ('error' in transcriptResult) {
+      return { error: transcriptResult.error }
+    }
+
+    const transcriptHash = hashTranscript(transcriptResult.text)
+    if (!forceRegenerate) {
+      const cached = await getChapterCache(videoId, transcriptHash)
+      if (cached) {
+        return { chapters: cached.chapters, source: cached.source, cached: true }
+      }
+    }
+
+    onProgress(40, 'Generating chapters…')
+    const result = forceRegenerate
+      ? await regenerateChapters(transcriptResult, title, durationSeconds)
+      : await generateChapters(transcriptResult, title, durationSeconds)
+
+    return { ...result, cached: false }
+  })
+}
+
 async function handleMessage(
   message: Message,
   sender: chrome.runtime.MessageSender,
@@ -111,6 +193,35 @@ async function handleMessage(
         return
       }
 
+      case 'GET_CHAPTER_JOB_STATUS': {
+        const { videoId } = message.payload
+        const snapshot = getChapterJobSnapshot(videoId)
+        sendResponse({
+          snapshot,
+          pending: isChapterJobRunning(videoId),
+        })
+        return
+      }
+
+      case 'GET_CHAPTER_CACHE': {
+        const cached = await getChapterCache(message.payload.videoId)
+        if (!cached) {
+          sendResponse(null)
+          return
+        }
+        sendResponse({
+          chapters: cached.chapters,
+          source: cached.source,
+          cached: true,
+        })
+        return
+      }
+
+      case 'GET_REGENERATE_QUOTA': {
+        sendResponse(await getRegenerateQuota())
+        return
+      }
+
       case 'GENERATE_CHAPTERS': {
         const settings = await getSettings()
         if (!settings.enabled) {
@@ -129,68 +240,82 @@ async function handleMessage(
         const title = liveContext?.title ?? message.payload.title
         const durationSeconds = liveContext?.durationSeconds ?? message.payload.durationSeconds
 
-        const cachedWithoutTranscript = await getChapterCache(videoId)
-        if (cachedWithoutTranscript && !cachedWithoutTranscript.transcriptHash) {
+        if (liveContext?.needsRefresh) {
+          const cached = await getChapterCache(videoId)
+          if (!cached && !isChapterJobRunning(videoId)) {
+            sendResponse({ error: 'Refresh the page to load this video' })
+            return
+          }
+        }
+
+        if (!isChapterJobRunning(videoId)) {
+          const cached = await getChapterCache(videoId)
+          if (cached) {
+            sendResponse({
+              chapters: cached.chapters,
+              source: cached.source,
+              cached: true,
+            })
+            return
+          }
+        }
+
+        const result = await executeChapterGeneration(
+          videoId,
+          title,
+          durationSeconds,
+          tabId,
+          false,
+        )
+        sendResponse(result)
+        return
+      }
+
+      case 'REGENERATE_CHAPTERS': {
+        const settings = await getSettings()
+        if (!settings.enabled) {
+          sendResponse({ error: 'Extension is disabled in settings' })
+          return
+        }
+
+        const { videoId } = message.payload
+
+        if (isChapterJobRunning(videoId)) {
+          sendResponse({ error: 'Chapter generation already in progress for this video' })
+          return
+        }
+
+        const quota = await getRegenerateQuota()
+        if (!quota.allowed) {
+          const seconds = Math.ceil(quota.retryAfterMs / 1000)
           sendResponse({
-            chapters: cachedWithoutTranscript.chapters,
-            source: 'ai' satisfies ChapterSource,
-            cached: true,
+            error: `Regenerate limit reached. Try again in ${seconds}s.`,
+            retryAfterMs: quota.retryAfterMs,
           })
           return
         }
 
-        emitChapterProgress(videoId, 8, 'Checking YouTube chapters…')
-        const nativeChapters = await getNativeChapters(tabId)
-        if (nativeChapters.length >= 2) {
-          const result = await cacheNativeChapters(videoId, nativeChapters)
-          emitChapterProgress(videoId, 100, 'Done')
-          sendResponse({ ...result, cached: false })
+        const tabId = await resolveYoutubeTabId(sender)
+        if (!tabId) {
+          sendResponse({ error: 'No active YouTube tab' })
           return
         }
 
-        emitChapterProgress(videoId, 15, 'Reading transcript…')
-        const transcriptResult = await getTranscriptForChapters(videoId)
-        if ('error' in transcriptResult) {
-          sendResponse({ error: transcriptResult.error })
-          return
-        }
+        await recordRegenerate()
 
-        const transcriptHash = hashTranscript(transcriptResult.text)
-        const cached = await getChapterCache(videoId, transcriptHash)
-        if (cached) {
-          sendResponse({ chapters: cached.chapters, source: cached.source, cached: true })
-          return
-        }
+        const liveContext = await getLiveVideoContext(tabId)
+        const title = liveContext?.title ?? lastVideoContext?.payload.title ?? 'YouTube Video'
+        const durationSeconds =
+          liveContext?.durationSeconds ?? lastVideoContext?.payload.durationSeconds ?? 0
 
-        emitChapterProgress(videoId, 40, 'Generating chapters…')
-        const result = await generateChapters(
-          transcriptResult,
+        const result = await executeChapterGeneration(
+          videoId,
           title,
           durationSeconds,
+          tabId,
+          true,
         )
-        emitChapterProgress(videoId, 100, 'Done')
-        sendResponse({ ...result, cached: false })
-        return
-      }
-
-      case 'INVALIDATE_CHAPTER_CACHE': {
-        const { videoId } = message.payload
-
-        emitChapterProgress(videoId, 15, 'Reading transcript…')
-        const transcriptResult = await getTranscriptForChapters(videoId)
-        if ('error' in transcriptResult) {
-          sendResponse({ error: transcriptResult.error })
-          return
-        }
-
-        emitChapterProgress(videoId, 40, 'Generating chapters…')
-        const result = await regenerateChapters(
-          transcriptResult,
-          lastVideoContext?.payload.title ?? 'YouTube Video',
-          lastVideoContext?.payload.durationSeconds ?? 0,
-        )
-        emitChapterProgress(videoId, 100, 'Done')
-        sendResponse({ ...result, cached: false })
+        sendResponse(result)
         return
       }
 
@@ -210,21 +335,6 @@ async function handleMessage(
     }
   } catch (error) {
     sendResponse({ error: error instanceof Error ? error.message : 'Unknown error' })
-  }
-}
-
-async function getNativeChapters(tabId: number): Promise<Chapter[]> {
-  const response = (await sendMessageToTab(tabId, { type: 'GET_NATIVE_CHAPTERS' })) as {
-    chapters?: Chapter[]
-  }
-  return response.chapters ?? []
-}
-
-async function getTranscriptForChapters(videoId: string) {
-  try {
-    return await fetchTranscript(videoId)
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : 'Failed to load transcript' } as const
   }
 }
 

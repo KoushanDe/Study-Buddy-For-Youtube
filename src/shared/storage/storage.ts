@@ -7,12 +7,6 @@ export interface Settings {
   enabled: boolean
 }
 
-export interface StorageSchema {
-  [STORAGE_KEYS.settings]: Settings
-  [STORAGE_KEYS.transcriptCache]: Record<string, TranscriptCacheEntry>
-  [STORAGE_KEYS.chapterCache]: Record<string, ChapterCacheEntry>
-}
-
 const DEFAULT_SETTINGS: Settings = {
   enabled: true,
 }

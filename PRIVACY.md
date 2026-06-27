@@ -23,10 +23,10 @@ This data stays on your device unless sent as described below.
 The extension reads public YouTube page content and caption data while you browse `youtube.com`.
 
 ### Developer Backend
-When you use AI chapters, the video ID and metadata (title, duration) are sent to the Study Buddy for YouTube backend API, which fetches the video's transcript and generates chapter titles. This is required for the feature to work.
+When you use AI chapters on a video without creator-added chapters, the extension fetches the transcript locally in your browser from YouTube caption data. The video ID, metadata (title, duration), and transcript text are then sent to the Study Buddy for YouTube backend API to generate chapter titles.
 
 ### Google Gemini
-The backend sends transcript excerpts to Google's Gemini API to generate chapters when the creator has not added their own.
+The backend sends transcript excerpts to Google's Gemini API to generate chapters when the creator has not added their own. Native YouTube chapters are read locally and are not sent to the backend.
 
 ## Permissions
 

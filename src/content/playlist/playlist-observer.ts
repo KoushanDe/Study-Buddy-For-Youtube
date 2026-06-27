@@ -3,11 +3,11 @@ import { debounce } from '../../shared/utils/debounce'
 import {
   findPlaylistContainer,
   getPlaylistItems,
-  getPlaylistMetadata,
   getPlaylistScrollContainer,
   isPlaylistScrollAtBottom,
   scrapeVisiblePlaylistVideos,
 } from '../../services/playlist-duration/playlist-duration.service'
+import { getPlaylistMetadata } from '../../services/playlist-duration/playlist-metadata'
 import { calculateSpeedDurations } from '../../services/playlist-duration/duration-calculator'
 import type { PlaylistDurationResult } from '../../shared/types/playlist'
 import { hasPlaylistContent } from '../../shared/utils/playlist-details'

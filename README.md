@@ -17,7 +17,7 @@ Chrome Extension (Manifest V3) that helps you consume long YouTube playlists and
 
 ## Setup
 
-### 1. Backend (chapter generation)
+### 1. Backend (chapter generation only)
 
 ```bash
 cd server
@@ -27,7 +27,7 @@ npm install
 npm run dev
 ```
 
-The API runs at `http://localhost:3001` by default.
+The API runs at `http://localhost:3001` and exposes `/api/chapters` (Gemini).
 
 ### 2. Extension
 
@@ -71,12 +71,12 @@ Click any chapter to seek.
 ```
 Popup
   → Service Worker
-    → POST /api/transcript  (backend fetches captions via Proof-of-Origin token)
-    → POST /api/chapters    (backend → Gemini 2.5 Flash, server-side API key)
+    → Content script fetches transcript on youtube.com (client-side)
+    → POST /api/chapters (transcript chunks → Gemini 2.5 Flash)
   → Chapters returned to popup
 ```
 
-Users never provide API keys. The backend holds the Gemini key and validates requests with a shared extension token.
+Users never provide API keys. The backend holds the Gemini key and validates requests with a shared extension token. Transcripts stay in the browser unless sent as text for chapter generation.
 
 ## Permissions
 
@@ -85,7 +85,7 @@ Users never provide API keys. The backend holds the Gemini key and validates req
 | `storage` | Cache data and save settings locally |
 | `tabs` | Relay seek commands to the active YouTube tab |
 | `youtube.com` | Content scripts for playlist UI and page metadata |
-| Your API origin | Call your transcript + chapter generation backend |
+| Your API origin | Call the chapter generation backend |
 
 ## Privacy
 
@@ -94,6 +94,6 @@ See [PRIVACY.md](./PRIVACY.md).
 ## Project Structure
 
 ```
-src/           # Chrome extension
-server/        # Transcript + Gemini chapter API backend
+src/           # Chrome extension (transcript + UI)
+server/        # Gemini chapter API backend
 ```

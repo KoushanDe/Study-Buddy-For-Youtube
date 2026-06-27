@@ -5,13 +5,6 @@ export interface Chapter {
 
 export type ChapterSource = 'youtube' | 'ai'
 
-export interface ChaptersResponse {
-  chapters: Chapter[]
-  source: ChapterSource
-  cached?: boolean
-  error?: string
-}
-
 export interface ChapterCacheEntry {
   chapters: Chapter[]
   transcriptHash?: string

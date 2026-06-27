@@ -53,7 +53,7 @@ export async function cacheNativeChapters(
   videoId: string,
   chapters: Chapter[],
 ): Promise<{ chapters: Chapter[]; source: ChapterSource }> {
-  const source: ChapterSource = 'ai'
+  const source: ChapterSource = 'youtube'
   await setChapterCache(videoId, {
     chapters,
     source,

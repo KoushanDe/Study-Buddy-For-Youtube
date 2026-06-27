@@ -1,10 +1,10 @@
-const EVENT_NAME = 'study-buddy-for-youtube-player-response'
+import { PLAYER_RESPONSE_EVENT } from '../../shared/constants'
 
 function publishPlayerResponse(): void {
   const response = (window as Window & { ytInitialPlayerResponse?: unknown }).ytInitialPlayerResponse
   if (!response) return
 
-  document.dispatchEvent(new CustomEvent(EVENT_NAME, { detail: response }))
+  document.dispatchEvent(new CustomEvent(PLAYER_RESPONSE_EVENT, { detail: response }))
 }
 
 publishPlayerResponse()

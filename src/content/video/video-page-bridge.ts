@@ -1,6 +1,10 @@
 import { getVideoId } from '../../shared/utils/youtube-url'
+import { isExtensionContextValid } from '../../shared/utils/extension-context'
 import { sendMessage } from '../../shared/messaging/send-message'
+import { chaptersNeedRefresh } from '../../services/chapters/chapter-page-state'
 import { extractNativeYouTubeChapters } from '../../services/chapters/youtube-native-chapters'
+import { fetchTranscriptFromPage } from '../../services/transcript/transcript-bridge'
+import type { Message } from '../../shared/types/messages'
 
 function getVideoTitle(): string {
   const titleEl =
@@ -38,32 +42,39 @@ function waitForVideoMetadata(): Promise<number> {
   })
 }
 
+function publishVideoContext(): void {
+  if (!isExtensionContextValid()) return
+
+  const videoId = getVideoId()
+  if (!videoId) return
+
+  void sendMessage({
+    type: 'VIDEO_CONTEXT',
+    payload: {
+      videoId,
+      title: getVideoTitle(),
+      durationSeconds: getVideoDurationSeconds(),
+      needsRefresh: chaptersNeedRefresh(),
+    },
+  })
+}
+
 export async function initVideoPageBridge(): Promise<() => void> {
   const videoId = getVideoId()
   if (!videoId) return () => undefined
 
-  const publishVideoContext = () => {
-    const currentVideoId = getVideoId()
-    if (!currentVideoId) return
-
-    void sendMessage({
-      type: 'VIDEO_CONTEXT',
-      payload: {
-        videoId: currentVideoId,
-        title: getVideoTitle(),
-        durationSeconds: getVideoDurationSeconds(),
-      },
-    })
-  }
-
   publishVideoContext()
 
-  void waitForVideoMetadata().then(() => {
+  void waitForVideoMetadata().then(() => publishVideoContext())
+
+  const onNavigate = () => {
     publishVideoContext()
-  })
+    void waitForVideoMetadata().then(() => publishVideoContext())
+  }
+  document.addEventListener('yt-navigate-finish', onNavigate)
 
   const onMessage = (
-    message: { type: string; payload?: { seconds: number; videoId: string } },
+    message: Message,
     _sender: chrome.runtime.MessageSender,
     sendResponse: (response?: unknown) => void,
   ) => {
@@ -78,6 +89,13 @@ export async function initVideoPageBridge(): Promise<() => void> {
     }
 
     if (message.type === 'GET_NATIVE_CHAPTERS') {
+      const expectedVideoId = message.payload.videoId
+      const currentVideoId = getVideoId()
+      if (expectedVideoId && currentVideoId && expectedVideoId !== currentVideoId) {
+        sendResponse({ chapters: [] })
+        return true
+      }
+
       const chapters = extractNativeYouTubeChapters()
       sendResponse({ chapters: chapters ?? [] })
       return true
@@ -89,11 +107,23 @@ export async function initVideoPageBridge(): Promise<() => void> {
         sendResponse(null)
         return true
       }
+
       sendResponse({
         videoId: currentVideoId,
         title: getVideoTitle(),
         durationSeconds: getVideoDurationSeconds(),
+        needsRefresh: chaptersNeedRefresh(),
       })
+      return true
+    }
+
+    if (message.type === 'FETCH_TRANSCRIPT' && message.payload?.videoId) {
+      void fetchTranscriptFromPage(message.payload.videoId)
+        .then((result) => sendResponse({ result }))
+        .catch((error: unknown) => {
+          const errorMessage = error instanceof Error ? error.message : 'Failed to load transcript'
+          sendResponse({ error: errorMessage })
+        })
       return true
     }
 
@@ -103,6 +133,7 @@ export async function initVideoPageBridge(): Promise<() => void> {
   chrome.runtime.onMessage.addListener(onMessage)
 
   return () => {
+    document.removeEventListener('yt-navigate-finish', onNavigate)
     chrome.runtime.onMessage.removeListener(onMessage)
   }
 }

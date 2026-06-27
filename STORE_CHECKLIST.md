@@ -30,7 +30,7 @@
 
 ## Privacy disclosures
 
-- Video ID and metadata sent to developer backend, which fetches the transcript and generates chapters
+- Transcript fetched locally in the browser; video ID, metadata, and transcript text sent to developer backend for AI chapter generation (native YouTube chapters stay local)
 - Backend uses Google Gemini API with server-side key
 - No user API keys required
 - Link to [PRIVACY.md](./PRIVACY.md)

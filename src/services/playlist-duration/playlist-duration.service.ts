@@ -3,10 +3,7 @@ import { ynLog } from '../../shared/utils/debug-log'
 import { querySelectorAllDeep } from '../../shared/utils/shadow-dom'
 import { parseDurationToSeconds } from './duration-parser'
 
-export type { PlaylistMetadata } from './playlist-metadata'
-export { getPlaylistMetadata } from './playlist-metadata'
-
-export interface ScrapedVideo {
+interface ScrapedVideo {
   videoId: string
   durationSeconds: number
 }
