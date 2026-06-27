@@ -9,7 +9,22 @@ import { ExtensionIcon } from './components/ExtensionIcon'
 import { PlaylistDurationPanel } from './components/PlaylistDurationPanel'
 
 const CREDITS_LINKEDIN_URL = 'https://www.linkedin.com/in/koushan-de-04a966192'
+const SUPPORT_BMC_URL = 'https://buymeacoffee.com/koushan'
 const PLAYLIST_LOAD_TIMEOUT_MS = 8000
+
+function BuyMeCoffeeIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className={className}
+      aria-hidden
+    >
+      <path d="M3 8h1v7a3 3 0 0 0 3 3h8.5a4.5 4.5 0 0 0 0-9H17V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v1Zm3-1h10v1H6V7Zm11 3h.5a2.5 2.5 0 0 1 0 5H18v-5ZM6 20h8a1 1 0 0 0 1-1v-1H5v1a1 1 0 0 0 1 1Z" />
+    </svg>
+  )
+}
 
 async function fetchPlaylistDuration(
   tabId: number,
@@ -208,15 +223,15 @@ export default function App() {
   return (
     <div className="w-[340px] p-5">
       <header className="mb-5">
-        <div className="flex items-center gap-2.5">
-          <ExtensionIcon className="h-8 w-8 shrink-0" />
-          <h1 className="yn-popup-title text-base text-[var(--yn-text)]">
+        <div className="grid grid-cols-[2rem_1fr] items-center gap-x-2.5 gap-y-1.5">
+          <ExtensionIcon className="col-start-1 row-span-2 h-8 w-8 self-start" />
+          <h1 className="yn-popup-title col-start-2 row-start-1 text-base text-[var(--yn-text)]">
             Study Buddy for YouTube
           </h1>
+          <p className="yn-popup-tagline col-start-2 row-start-2 text-[0.8125rem] text-[var(--yn-muted)]">
+            Playlist duration on list pages. Chapters on watch pages.
+          </p>
         </div>
-        <p className="yn-popup-tagline mt-1.5 text-[0.8125rem] text-[var(--yn-muted)]">
-          Playlist duration on list pages. Chapters on watch pages.
-        </p>
       </header>
 
       <div className="mb-3 rounded-xl border border-[var(--yn-border)]">
@@ -269,15 +284,26 @@ export default function App() {
         </p>
       )}
 
-      <footer className="yn-popup-credits mt-5 border-t border-[var(--yn-border)] pt-3 text-center text-xs text-[var(--yn-muted)]">
-        Made by{' '}
+      <footer className="yn-popup-credits mt-5 flex items-center justify-between gap-3 border-t border-[var(--yn-border)] pt-3 text-xs text-[var(--yn-muted)]">
+        <p className="m-0 leading-none">
+          Made by{' '}
+          <a
+            href={CREDITS_LINKEDIN_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[var(--yn-accent)] hover:underline"
+          >
+            Koushan De
+          </a>
+        </p>
         <a
-          href={CREDITS_LINKEDIN_URL}
+          href={SUPPORT_BMC_URL}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-[var(--yn-accent)] hover:underline"
+          aria-label="Buy me a coffee"
+          className="inline-flex shrink-0 items-center justify-center rounded-md p-1.5 leading-none text-[var(--yn-muted)] transition-colors hover:bg-[var(--yn-surface)] hover:text-[var(--yn-accent)]"
         >
-          Koushan De
+          <BuyMeCoffeeIcon className="h-4 w-4" />
         </a>
       </footer>
     </div>
