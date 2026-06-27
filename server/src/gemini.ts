@@ -8,6 +8,7 @@ interface Boundary {
 }
 
 const MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
+const GEMINI_REQUEST_TIMEOUT_MS = 90_000
 
 /**
  * Two-pass chapter generation.
@@ -235,21 +236,30 @@ function buildBoundaryContextText(input: ChapterRequest, boundaries: Boundary[])
 }
 
 async function callGemini<T>(apiKey: string, prompt: string, responseSchema: unknown): Promise<T[]> {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.15,
-          responseMimeType: 'application/json',
-          responseSchema,
-        },
-      }),
-    },
-  )
+  let response: Response
+  try {
+    response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.15,
+            responseMimeType: 'application/json',
+            responseSchema,
+          },
+        }),
+        signal: AbortSignal.timeout(GEMINI_REQUEST_TIMEOUT_MS),
+      },
+    )
+  } catch (error) {
+    if (error instanceof Error && error.name === 'TimeoutError') {
+      throw new Error('Gemini request timed out')
+    }
+    throw error
+  }
 
   if (!response.ok) {
     const errorText = await response.text()
