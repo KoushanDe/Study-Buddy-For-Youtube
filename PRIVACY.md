@@ -1,6 +1,6 @@
 # Privacy Policy — Study Buddy for YouTube
 
-**Last updated:** June 18, 2026
+**Last updated:** June 27, 2026
 
 Study Buddy for YouTube is a Chrome extension with an optional backend API operated by the extension developer.
 
