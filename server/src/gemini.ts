@@ -8,7 +8,7 @@ interface Boundary {
 }
 
 const MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
-const GEMINI_REQUEST_TIMEOUT_MS = 90_000
+const GEMINI_REQUEST_TIMEOUT_MS = 180_000
 
 /**
  * Two-pass chapter generation.

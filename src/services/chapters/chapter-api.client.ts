@@ -2,7 +2,7 @@ import type { ChapterPromptInput } from '../../shared/types/chapter'
 import type { Chapter } from '../../shared/types/chapter'
 import { API_BASE_URL, EXTENSION_API_TOKEN } from '../../config'
 
-const CHAPTER_API_TIMEOUT_MS = 120_000
+const CHAPTER_API_TIMEOUT_MS = 300_000
 
 export async function requestChaptersFromBackend(input: ChapterPromptInput): Promise<Chapter[]> {
   const headers: Record<string, string> = {
