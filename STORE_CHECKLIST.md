@@ -6,12 +6,13 @@
 - [ ] Build extension with production `VITE_API_BASE_URL` and `VITE_EXTENSION_API_TOKEN`
 - [ ] Run `npm run build` successfully
 - [ ] Run `npm run package` to create `study-buddy-for-youtube.zip`
-- [ ] Manually test:
+- [ ] Manually test (see [SMOKE_TEST.md](./SMOKE_TEST.md)):
   - [ ] Playlist page shows duration card
   - [ ] Video page popup shows AI chapters
   - [ ] AI chapters generate via backend with accurate timestamps
   - [ ] Chapter click seeks video
   - [ ] Progress bar shows during generation
+  - [ ] Regenerate flow (reason, feedback, quota)
 
 ## Store listing assets
 

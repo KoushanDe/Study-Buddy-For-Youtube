@@ -10,12 +10,17 @@ export interface ChapterCacheEntry {
   transcriptHash?: string
   source: ChapterSource
   fetchedAt: number
+  pendingFeedback?: {
+    stagingId: string
+    feedbackSubmitted: boolean
+  }
 }
 
 export interface ChapterPromptInput {
   videoId: string
   title: string
   durationSeconds: number
+  clientId?: string
   chunks: Array<{
     startSeconds: number
     endSeconds: number

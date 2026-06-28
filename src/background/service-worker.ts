@@ -3,16 +3,22 @@ import {
   cacheNativeChapters,
   generateChapters,
   regenerateChapters,
+  getCachedChaptersIfValid,
 } from '../services/chapters/chapter.service'
 import {
   getChapterJobSnapshot,
   isChapterJobRunning,
   runDedupedChapterJob,
+  clearChapterJobSnapshot,
   type ChapterGenerationResult,
 } from '../services/chapters/chapter-generation-coordinator'
 import { fetchTranscript } from '../services/transcript/transcript.service'
-import { getChapterCache, getSettings, hashTranscript } from '../shared/storage/storage'
-import { getRegenerateQuota, recordRegenerate } from '../shared/storage/regenerate-rate-limit'
+import { getChapterCache, getSettings, hashTranscript, markChapterCacheFeedbackSubmitted } from '../shared/storage/storage'
+import { getOrCreateClientId } from '../shared/storage/client-id'
+import {
+  getRegenerateQuota,
+  submitRegenerateFeedback,
+} from '../services/chapters/chapter-api.client'
 import { sendMessageToTab } from '../shared/messaging/send-message'
 import type { Chapter } from '../shared/types/chapter'
 
@@ -123,24 +129,16 @@ async function executeChapterGeneration(
   durationSeconds: number,
   tabId: number,
   forceRegenerate: boolean,
+  regenerateReason?: string,
 ): Promise<ChapterGenerationResult> {
   return runDedupedChapterJob(videoId, emitChapterProgress, async (onProgress) => {
     if (!forceRegenerate) {
-      const cached = await getChapterCache(videoId)
-      if (cached) {
-        return {
-          chapters: cached.chapters,
-          source: cached.source,
-          cached: true,
-        }
+      onProgress(8, 'Checking YouTube chapters…')
+      const nativeChapters = await getNativeChapters(tabId, videoId)
+      if (nativeChapters.length >= 2) {
+        const result = await cacheNativeChapters(videoId, nativeChapters)
+        return { ...result, cached: false }
       }
-    }
-
-    onProgress(8, 'Checking YouTube chapters…')
-    const nativeChapters = await getNativeChapters(tabId, videoId)
-    if (nativeChapters.length >= 2) {
-      const result = await cacheNativeChapters(videoId, nativeChapters)
-      return { ...result, cached: false }
     }
 
     onProgress(15, 'Reading transcript…')
@@ -151,17 +149,37 @@ async function executeChapterGeneration(
 
     const transcriptHash = hashTranscript(transcriptResult.text)
     if (!forceRegenerate) {
-      const cached = await getChapterCache(videoId, transcriptHash)
+      const cached = await getCachedChaptersIfValid(videoId, transcriptHash)
       if (cached) {
         return { chapters: cached.chapters, source: cached.source, cached: true }
       }
     }
 
-    onProgress(40, 'Generating chapters…')
-    const result = forceRegenerate
-      ? await regenerateChapters(transcriptResult, title, durationSeconds)
-      : await generateChapters(transcriptResult, title, durationSeconds)
+    onProgress(40, forceRegenerate ? 'Regenerating chapters…' : 'Generating chapters…')
 
+    if (forceRegenerate) {
+      if (!regenerateReason?.trim()) {
+        return { error: 'A reason for regeneration is required' }
+      }
+      const clientId = await getOrCreateClientId()
+      const result = await regenerateChapters(
+        transcriptResult,
+        title,
+        durationSeconds,
+        clientId,
+        regenerateReason.trim(),
+      )
+      return {
+        chapters: result.chapters,
+        source: result.source,
+        cached: false,
+        stagingId: result.stagingId,
+        reasonType: result.reasonType,
+        needsFeedback: result.needsFeedback,
+      }
+    }
+
+    const result = await generateChapters(transcriptResult, title, durationSeconds)
     return { ...result, cached: false }
   })
 }
@@ -203,6 +221,12 @@ async function handleMessage(
         return
       }
 
+      case 'CLEAR_CHAPTER_JOB_SNAPSHOT': {
+        clearChapterJobSnapshot(message.payload.videoId)
+        sendResponse({ ok: true })
+        return
+      }
+
       case 'GET_CHAPTER_CACHE': {
         const cached = await getChapterCache(message.payload.videoId)
         if (!cached) {
@@ -213,12 +237,15 @@ async function handleMessage(
           chapters: cached.chapters,
           source: cached.source,
           cached: true,
+          pendingFeedback: cached.pendingFeedback,
         })
         return
       }
 
       case 'GET_REGENERATE_QUOTA': {
-        sendResponse(await getRegenerateQuota())
+        const clientId = await getOrCreateClientId()
+        const videoId = message.payload?.videoId
+        sendResponse(await getRegenerateQuota(clientId, videoId))
         return
       }
 
@@ -255,6 +282,7 @@ async function handleMessage(
               chapters: cached.chapters,
               source: cached.source,
               cached: true,
+              pendingFeedback: cached.pendingFeedback,
             })
             return
           }
@@ -278,30 +306,13 @@ async function handleMessage(
           return
         }
 
-        const { videoId } = message.payload
-
-        if (isChapterJobRunning(videoId)) {
-          sendResponse({ error: 'Chapter generation already in progress for this video' })
-          return
-        }
-
-        const quota = await getRegenerateQuota()
-        if (!quota.allowed) {
-          const seconds = Math.ceil(quota.retryAfterMs / 1000)
-          sendResponse({
-            error: `Regenerate limit reached. Try again in ${seconds}s.`,
-            retryAfterMs: quota.retryAfterMs,
-          })
-          return
-        }
+        const { videoId, reason } = message.payload
 
         const tabId = await resolveYoutubeTabId(sender)
         if (!tabId) {
           sendResponse({ error: 'No active YouTube tab' })
           return
         }
-
-        await recordRegenerate()
 
         const liveContext = await getLiveVideoContext(tabId)
         const title = liveContext?.title ?? lastVideoContext?.payload.title ?? 'YouTube Video'
@@ -314,7 +325,24 @@ async function handleMessage(
           durationSeconds,
           tabId,
           true,
+          reason,
         )
+        sendResponse(result)
+        return
+      }
+
+      case 'SUBMIT_REGENERATE_FEEDBACK': {
+        const clientId = await getOrCreateClientId()
+        const { stagingId, videoId, satisfied } = message.payload
+        const result = await submitRegenerateFeedback({
+          clientId,
+          stagingId,
+          videoId,
+          satisfied,
+        })
+        if (!('error' in result)) {
+          await markChapterCacheFeedbackSubmitted(videoId)
+        }
         sendResponse(result)
         return
       }
@@ -331,7 +359,7 @@ async function handleMessage(
       }
 
       default:
-        sendResponse({ ok: true })
+        sendResponse({ error: `Unhandled message type: ${(message as Message).type}` })
     }
   } catch (error) {
     sendResponse({ error: error instanceof Error ? error.message : 'Unknown error' })

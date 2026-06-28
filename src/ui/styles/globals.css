@@ -36,6 +36,12 @@ body {
   color: var(--yn-text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+#root {
+  position: relative;
+  overflow: hidden;
 }
 
 .yn-popup-title {

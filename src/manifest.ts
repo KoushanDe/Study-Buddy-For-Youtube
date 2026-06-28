@@ -13,7 +13,7 @@ function getApiHostPermission(): string {
 export default defineManifest({
   manifest_version: 3,
   name: 'Study Buddy for YouTube',
-  version: '0.2.0',
+  version: '1.0.0',
   description:
     'Consume long YouTube playlists and videos efficiently with playlist duration totals and AI-generated chapters.',
   permissions: ['storage', 'tabs'],

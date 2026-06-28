@@ -1,11 +1,11 @@
 import { buildTranscriptChunks } from './chapter-segmenter'
-import { requestChaptersFromBackend } from './chapter-api.client'
+import { requestChaptersFromBackend, requestRegenerateFromBackend } from './chapter-api.client'
 import {
   getChapterCache,
   hashTranscript,
-  invalidateChapterCache,
   setChapterCache,
 } from '../../shared/storage/storage'
+import { getOrCreateClientId } from '../../shared/storage/client-id'
 import type { Chapter, ChapterSource } from '../../shared/types/chapter'
 import type { TranscriptResult } from '../../shared/types/transcript'
 
@@ -13,21 +13,17 @@ export async function generateChapters(
   transcript: TranscriptResult,
   title: string,
   durationSeconds: number,
-  force = false,
 ): Promise<{ chapters: Chapter[]; source: ChapterSource }> {
   const transcriptHash = hashTranscript(transcript.text)
   const source: ChapterSource = 'ai'
 
-  if (!force) {
-    const cached = await getChapterCache(transcript.videoId, transcriptHash)
-    if (cached) return { chapters: cached.chapters, source: cached.source }
-  }
-
   const chunks = buildTranscriptChunks(transcript.segments, durationSeconds)
+  const clientId = await getOrCreateClientId()
   const chapters = await requestChaptersFromBackend({
     videoId: transcript.videoId,
     title,
     durationSeconds,
+    clientId,
     chunks,
   })
 
@@ -44,9 +40,42 @@ export async function regenerateChapters(
   transcript: TranscriptResult,
   title: string,
   durationSeconds: number,
-): Promise<{ chapters: Chapter[]; source: ChapterSource }> {
-  await invalidateChapterCache(transcript.videoId)
-  return generateChapters(transcript, title, durationSeconds, true)
+  clientId: string,
+  reason: string,
+): Promise<{
+  chapters: Chapter[]
+  source: ChapterSource
+  stagingId: string
+  reasonType: 'issue' | 'nuanced'
+  needsFeedback: boolean
+}> {
+  const chunks = buildTranscriptChunks(transcript.segments, durationSeconds)
+  const result = await requestRegenerateFromBackend({
+    videoId: transcript.videoId,
+    title,
+    durationSeconds,
+    chunks,
+    clientId,
+    reason,
+  })
+
+  await setChapterCache(transcript.videoId, {
+    chapters: result.chapters,
+    transcriptHash: hashTranscript(transcript.text),
+    source: 'ai',
+    pendingFeedback: {
+      stagingId: result.stagingId,
+      feedbackSubmitted: false,
+    },
+  })
+
+  return {
+    chapters: result.chapters,
+    source: 'ai',
+    stagingId: result.stagingId,
+    reasonType: result.reasonType,
+    needsFeedback: true,
+  }
 }
 
 export async function cacheNativeChapters(
@@ -59,4 +88,13 @@ export async function cacheNativeChapters(
     source,
   })
   return { chapters, source }
+}
+
+export async function getCachedChaptersIfValid(
+  videoId: string,
+  transcriptHash: string,
+): Promise<{ chapters: Chapter[]; source: ChapterSource } | null> {
+  const cached = await getChapterCache(videoId, transcriptHash)
+  if (!cached) return null
+  return { chapters: cached.chapters, source: cached.source }
 }

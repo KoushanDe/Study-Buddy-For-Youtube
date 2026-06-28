@@ -10,6 +10,9 @@ export interface ChapterJobStatusResponse {
       chapters?: Chapter[]
       source?: ChapterSource
       cached?: boolean
+      stagingId?: string
+      needsFeedback?: boolean
+      pendingFeedback?: { stagingId: string; feedbackSubmitted: boolean }
     }
   } | null
   pending?: boolean

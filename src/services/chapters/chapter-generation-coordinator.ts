@@ -5,6 +5,9 @@ export interface ChapterGenerationResult {
   source?: ChapterSource
   cached?: boolean
   error?: string
+  stagingId?: string
+  reasonType?: 'issue' | 'nuanced'
+  needsFeedback?: boolean
 }
 
 export type ChapterJobStatus = 'idle' | 'running' | 'done' | 'error'
@@ -61,7 +64,30 @@ function startTrickle(videoId: string, emitProgress: ProgressEmitter): void {
 
 export function getChapterJobSnapshot(videoId: string): ChapterJobSnapshot | null {
   if (snapshot.status === 'idle' || snapshot.videoId !== videoId) return null
+
+  // Job promise finished but snapshot was not advanced — don't trap the UI in a loader.
+  if (snapshot.status === 'running' && !inFlight.has(videoId)) {
+    snapshot = {
+      videoId: '',
+      progress: 0,
+      label: '',
+      status: 'idle',
+    }
+    return null
+  }
+
   return { ...snapshot, result: snapshot.result ? { ...snapshot.result } : undefined }
+}
+
+export function clearChapterJobSnapshot(videoId: string): void {
+  if (snapshot.videoId !== videoId) return
+  stopTrickle()
+  snapshot = {
+    videoId: '',
+    progress: 0,
+    label: '',
+    status: 'idle',
+  }
 }
 
 export function isChapterJobRunning(videoId?: string): boolean {

@@ -78,9 +78,16 @@ export async function setChapterCache(
   await writeLocal({ [STORAGE_KEYS.chapterCache]: cache })
 }
 
-export async function invalidateChapterCache(videoId: string): Promise<void> {
-  const cache = (await readLocal<Record<string, ChapterCacheEntry>>(STORAGE_KEYS.chapterCache)) ?? {}
-  delete cache[videoId]
+export async function markChapterCacheFeedbackSubmitted(videoId: string): Promise<void> {
+  const cache =
+    (await readLocal<Record<string, ChapterCacheEntry>>(STORAGE_KEYS.chapterCache)) ?? {}
+  const entry = cache[videoId]
+  if (!entry?.pendingFeedback) return
+
+  cache[videoId] = {
+    ...entry,
+    pendingFeedback: { ...entry.pendingFeedback, feedbackSubmitted: true },
+  }
   await writeLocal({ [STORAGE_KEYS.chapterCache]: cache })
 }
 

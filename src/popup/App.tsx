@@ -128,17 +128,64 @@ export default function App() {
   const [playlistExpanded, setPlaylistExpanded] = useState(false)
   const [chaptersExpanded, setChaptersExpanded] = useState(false)
 
-  const refreshActiveTab = useCallback(() => {
+  const resolveVideoContext = useCallback(async (): Promise<VideoContext | null> => {
+    const isContext = (value: unknown): value is VideoContext =>
+      Boolean(value && typeof value === 'object' && 'videoId' in value)
+
+    let tabUrl: string | undefined
+
     if (activeTabId !== null) {
-      void chrome.tabs.reload(activeTabId)
+      try {
+        const tab = await chrome.tabs.get(activeTabId)
+        tabUrl = tab.url
+      } catch {
+        tabUrl = undefined
+      }
+
+      const fromTab = await sendMessageToTab(activeTabId, { type: 'GET_VIDEO_CONTEXT' })
+      if (isContext(fromTab)) {
+        const urlVideoId = getVideoIdFromUrl(tabUrl ?? '')
+        if (!urlVideoId || fromTab.videoId === urlVideoId) return fromTab
+      }
+    }
+
+    const fromWorker = await sendMessage({ type: 'GET_VIDEO_CONTEXT' }).catch(() => null)
+    if (isContext(fromWorker)) {
+      const urlVideoId = getVideoIdFromUrl(tabUrl ?? '')
+      if (!urlVideoId || fromWorker.videoId === urlVideoId) return fromWorker
+    }
+
+    return null
+  }, [activeTabId])
+
+  const refreshActiveTab = useCallback(() => {
+    const reloadTab = (tabId: number) => {
+      setVideoContext((current) =>
+        current ? { ...current, needsRefresh: false } : current,
+      )
+
+      void chrome.tabs.reload(tabId)
+
+      const onUpdated = (updatedId: number, changeInfo: { status?: string }) => {
+        if (updatedId !== tabId || changeInfo.status !== 'complete') return
+        chrome.tabs.onUpdated.removeListener(onUpdated)
+        void resolveVideoContext().then((context) => {
+          if (context) setVideoContext(context)
+        })
+      }
+      chrome.tabs.onUpdated.addListener(onUpdated)
+    }
+
+    if (activeTabId !== null) {
+      reloadTab(activeTabId)
       return
     }
 
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tabId = tabs[0]?.id
-      if (tabId !== undefined) void chrome.tabs.reload(tabId)
+      if (tabId !== undefined) reloadTab(tabId)
     })
-  }, [activeTabId])
+  }, [activeTabId, resolveVideoContext])
 
   useEffect(() => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -156,39 +203,13 @@ export default function App() {
 
     let cancelled = false
 
-    const isContext = (value: unknown): value is VideoContext =>
-      Boolean(value && typeof value === 'object' && 'videoId' in value)
-
-    const resolveContext = async (): Promise<VideoContext | null> => {
-      let tabUrl: string | undefined
-
-      if (activeTabId !== null) {
-        try {
-          const tab = await chrome.tabs.get(activeTabId)
-          tabUrl = tab.url
-        } catch {
-          tabUrl = undefined
-        }
-
-        const fromTab = await sendMessageToTab(activeTabId, { type: 'GET_VIDEO_CONTEXT' })
-        if (isContext(fromTab)) {
-          const urlVideoId = getVideoIdFromUrl(tabUrl ?? '')
-          if (!urlVideoId || fromTab.videoId === urlVideoId) return fromTab
-        }
-      }
-
-      const fromWorker = await sendMessage({ type: 'GET_VIDEO_CONTEXT' }).catch(() => null)
-      if (isContext(fromWorker)) {
-        const urlVideoId = getVideoIdFromUrl(tabUrl ?? '')
-        if (!urlVideoId || fromWorker.videoId === urlVideoId) return fromWorker
-      }
-
-      return null
+    const refresh = () => {
+      void resolveVideoContext().then((context) => {
+        if (!cancelled) setVideoContext(context)
+      })
     }
 
-    void resolveContext().then((context) => {
-      if (!cancelled) setVideoContext(context)
-    })
+    refresh()
 
     const onVideoContext = (message: { type?: string; payload?: VideoContext }) => {
       if (message?.type !== 'VIDEO_CONTEXT' || !message.payload?.videoId) return
@@ -201,12 +222,14 @@ export default function App() {
     }
 
     chrome.runtime.onMessage.addListener(onVideoContext)
+    const interval = window.setInterval(refresh, 1500)
 
     return () => {
       cancelled = true
+      window.clearInterval(interval)
       chrome.runtime.onMessage.removeListener(onVideoContext)
     }
-  }, [chaptersExpanded, activeTabId])
+  }, [chaptersExpanded, activeTabId, resolveVideoContext])
 
   const togglePlaylistDuration = () => {
     setPlaylistExpanded((open) => !open)

@@ -36,7 +36,14 @@ export async function generateChaptersWithGemini(input: ChapterRequest): Promise
     return validateChapters([{ title: 'Full Video', startSeconds: 0 }], input.durationSeconds, guidance)
   }
 
-  const chapters = await titleAndRefine(apiKey, input, guidance, boundaries, buildBoundaryContextText(input, boundaries))
+  const chapters = await titleAndRefine(
+    apiKey,
+    input,
+    guidance,
+    boundaries,
+    buildBoundaryContextText(input, boundaries),
+    input.regenerateContext,
+  )
 
   // Pass 2 can fail to return usable titles; fall back to the raw boundaries.
   const resolved = chapters.length
@@ -118,6 +125,7 @@ async function titleAndRefine(
   guidance: ChapterGuidance,
   boundaries: Boundary[],
   boundaryContextText: string,
+  regenerateContext?: ChapterRequest['regenerateContext'],
 ): Promise<Chapter[]> {
   const durationMinutes = Math.round(input.durationSeconds / 60)
   const idealMinutes = Math.round(guidance.idealChapterLengthSeconds / 60)
@@ -126,12 +134,21 @@ async function titleAndRefine(
     .map((boundary) => `- ${formatTimestamp(boundary.startSeconds)} (startSeconds=${boundary.startSeconds}): ${boundary.topicSummary}`)
     .join('\n')
 
+  const nuancedSection =
+    regenerateContext?.reasonType === 'nuanced'
+      ? `
+## Viewer preference (nuanced regeneration)
+The viewer requested nuanced regeneration: "${regenerateContext.userReason.replace(/"/g, '\\"')}".
+Prefer more/fewer boundaries or thematic grouping as described, while respecting min/max chapter budgets.
+`
+      : ''
+
   const prompt = `You are finalizing navigation chapters for a YouTube video.
 
 ## Video
 - Title: ${input.title}
 - Duration: ${durationMinutes} minutes (${input.durationSeconds} seconds)
-
+${nuancedSection}
 ## Your task (PASS 2 of 2: titling + merge/split)
 Pass 1 detected the candidate section starts below (with high recall, so some may be redundant). Produce the final, clean list of chapters.
 
@@ -256,7 +273,7 @@ async function callGemini<T>(apiKey: string, prompt: string, responseSchema: unk
     )
   } catch (error) {
     if (error instanceof Error && error.name === 'TimeoutError') {
-      throw new Error('Gemini request timed out')
+      throw new Error('Gemini request timed out', { cause: error })
     }
     throw error
   }
