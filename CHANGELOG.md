@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.1 — 2026-06-29
+
+### Extension
+- Duration-aware chapter loader: 95% cap for all videos, pacing from measured end-to-end API times
+- Inline regenerate form (fixes black overlay leaking outside popup)
+- Regenerate failure recovery: preserve existing chapters, clear stale job snapshots
+- Quota-exhausted message handling improvements
+
+### Backend
+- PostgreSQL SSL config for managed hosts (Render external URL)
+- Dead code cleanup and regenerate quota helper consolidation
+
 ## 1.0.0 — 2026-06-28
 
 First stable release of Study Buddy for YouTube.

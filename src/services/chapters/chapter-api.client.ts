@@ -8,7 +8,7 @@ import type {
 import { API_BASE_URL, EXTENSION_API_TOKEN } from '../../config'
 import { formatSuccessQuotaExceededMessage } from '../../shared/utils/quota-reset'
 
-const CHAPTER_API_TIMEOUT_MS = 300_000
+export const CHAPTER_API_TIMEOUT_MS = 300_000
 
 function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = {

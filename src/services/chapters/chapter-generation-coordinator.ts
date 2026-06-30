@@ -1,4 +1,9 @@
 import type { Chapter, ChapterSource } from '../../shared/types/chapter'
+import {
+  buildChapterProgressPlan,
+  nextTrickleProgress,
+  type ChapterProgressPlan,
+} from './chapter-progress-plan'
 
 export interface ChapterGenerationResult {
   chapters?: Chapter[]
@@ -32,6 +37,9 @@ let snapshot: ChapterJobSnapshot = {
 
 const inFlight = new Map<string, Promise<ChapterGenerationResult>>()
 let trickleTimer: ReturnType<typeof setInterval> | null = null
+let activeProgressPlan: ChapterProgressPlan | null = null
+let jobStartedAt: number | null = null
+let aiPhaseStartedAt: number | null = null
 
 function stopTrickle(): void {
   if (trickleTimer !== null) {
@@ -40,33 +48,46 @@ function stopTrickle(): void {
   }
 }
 
-function trickleStep(current: number): number {
-  if (current >= 95) return current
-  const step = current < 30 ? 2.5 : current < 60 ? 1.2 : current < 85 ? 0.5 : 0.2
-  return Math.min(95, current + step)
+function resetProgressTracking(): void {
+  activeProgressPlan = null
+  jobStartedAt = null
+  aiPhaseStartedAt = null
 }
 
-function startTrickle(videoId: string, emitProgress: ProgressEmitter): void {
+function markAiPhaseStarted(progress: number): void {
+  if (progress >= 40 && aiPhaseStartedAt === null) {
+    aiPhaseStartedAt = Date.now()
+  }
+}
+
+function startTrickle(videoId: string, plan: ChapterProgressPlan, emitProgress: ProgressEmitter): void {
   stopTrickle()
+  activeProgressPlan = plan
   trickleTimer = setInterval(() => {
-    if (snapshot.status !== 'running' || snapshot.videoId !== videoId) {
+    if (snapshot.status !== 'running' || snapshot.videoId !== videoId || !activeProgressPlan) {
       stopTrickle()
       return
     }
 
-    const next = trickleStep(snapshot.progress)
+    const next = nextTrickleProgress(
+      snapshot.progress,
+      activeProgressPlan,
+      jobStartedAt,
+      aiPhaseStartedAt,
+    )
     if (next === snapshot.progress) return
 
     snapshot = { ...snapshot, progress: next }
     emitProgress(videoId, next, snapshot.label)
-  }, 350)
+  }, plan.trickleIntervalMs)
 }
 
 export function getChapterJobSnapshot(videoId: string): ChapterJobSnapshot | null {
   if (snapshot.status === 'idle' || snapshot.videoId !== videoId) return null
 
-  // Job promise finished but snapshot was not advanced — don't trap the UI in a loader.
   if (snapshot.status === 'running' && !inFlight.has(videoId)) {
+    stopTrickle()
+    resetProgressTracking()
     snapshot = {
       videoId: '',
       progress: 0,
@@ -82,6 +103,7 @@ export function getChapterJobSnapshot(videoId: string): ChapterJobSnapshot | nul
 export function clearChapterJobSnapshot(videoId: string): void {
   if (snapshot.videoId !== videoId) return
   stopTrickle()
+  resetProgressTracking()
   snapshot = {
     videoId: '',
     progress: 0,
@@ -97,15 +119,19 @@ export function isChapterJobRunning(videoId?: string): boolean {
 
 export function runDedupedChapterJob(
   videoId: string,
+  durationSeconds: number,
+  _forceRegenerate: boolean,
   emitProgress: ProgressEmitter,
   runner: ChapterRunner,
 ): Promise<ChapterGenerationResult> {
+  const progressPlan = buildChapterProgressPlan(durationSeconds)
+
   const existing = inFlight.get(videoId)
   if (existing) {
     if (snapshot.videoId === videoId && snapshot.status === 'running') {
       emitProgress(videoId, snapshot.progress, snapshot.label)
       if (trickleTimer === null) {
-        startTrickle(videoId, emitProgress)
+        startTrickle(videoId, activeProgressPlan ?? progressPlan, emitProgress)
       }
     }
     return existing
@@ -117,6 +143,9 @@ export function runDedupedChapterJob(
   })
   inFlight.set(videoId, promise)
 
+  resetProgressTracking()
+  jobStartedAt = Date.now()
+
   snapshot = {
     videoId,
     progress: 5,
@@ -124,22 +153,25 @@ export function runDedupedChapterJob(
     status: 'running',
   }
   emitProgress(videoId, snapshot.progress, snapshot.label)
-  startTrickle(videoId, emitProgress)
+  startTrickle(videoId, progressPlan, emitProgress)
 
   void (async () => {
     const onProgress = (progress: number, label: string) => {
+      markAiPhaseStarted(progress)
       snapshot = {
         videoId,
         progress: Math.max(snapshot.progress, progress),
         label,
         status: 'running',
       }
+      markAiPhaseStarted(snapshot.progress)
       emitProgress(videoId, snapshot.progress, label)
     }
 
     try {
       const result = await runner(onProgress)
       stopTrickle()
+      resetProgressTracking()
       snapshot = {
         videoId,
         progress: 100,
@@ -153,6 +185,7 @@ export function runDedupedChapterJob(
       resolveJob(result)
     } catch (error) {
       stopTrickle()
+      resetProgressTracking()
       const result: ChapterGenerationResult = {
         error: error instanceof Error ? error.message : 'Chapter generation failed',
       }

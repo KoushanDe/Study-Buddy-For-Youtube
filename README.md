@@ -121,4 +121,4 @@ server/        # API backend (Hono + PostgreSQL + Gemini)
 
 ## Version
 
-**1.0.0** — see [CHANGELOG.md](./CHANGELOG.md).
+**1.0.1** — see [CHANGELOG.md](./CHANGELOG.md).

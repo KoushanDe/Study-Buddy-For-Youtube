@@ -131,7 +131,12 @@ async function executeChapterGeneration(
   forceRegenerate: boolean,
   regenerateReason?: string,
 ): Promise<ChapterGenerationResult> {
-  return runDedupedChapterJob(videoId, emitChapterProgress, async (onProgress) => {
+  return runDedupedChapterJob(
+    videoId,
+    durationSeconds,
+    forceRegenerate,
+    emitChapterProgress,
+    async (onProgress) => {
     if (!forceRegenerate) {
       onProgress(8, 'Checking YouTube chapters…')
       const nativeChapters = await getNativeChapters(tabId, videoId)
